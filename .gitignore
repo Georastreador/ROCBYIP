@@ -1,0 +1,97 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+env/
+venv/
+venv2/
+ENV/
+env.bak/
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# PyCharm
+.idea/
+
+# VS Code
+.vscode/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# SQLite DB
+backend/app.db
+
+# Backups
+BYIP_BkUp/
+
+# Streamlit local files
+.streaming
+
+# Environment variables
+.env
+.env.*
+
+# Uploaded files and exports
+backend/uploads/
+backend/exports/
+
+# compiled files
+*.pyc
+
+# Others
+dist/
+build/
+__pycache__/
+*.egg-info/
+
+# Sensitive files
+*.pem
+
+# Replit specific
+.pythonlibs/
+.upm/
+uv.lock
+.config/
+.local/
+
+# Python UV package manager
+.venv/
+__pypackages__/
+
+# Exports and uploads
+exports/
+uploads/
+
+# SQLite databases
+*.db
+plans.db
+test.db
+
+# Backups (manter estrutura mas não os arquivos)
+backend/backups/*.db
+backups/*.db
+!backend/backups/.gitkeep

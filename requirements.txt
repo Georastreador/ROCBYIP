@@ -1,0 +1,37 @@
+# ROCBYIP vf1 - Dependências Python
+# Aplicação unificada (Backend FastAPI + Frontend Streamlit)
+# Atualizado em 2025-02-12
+
+# Framework Web
+fastapi==0.129.0
+uvicorn==0.40.0
+
+# Validação de Dados
+pydantic==2.11.7
+
+# Banco de Dados
+SQLAlchemy==2.0.46
+psycopg2-binary==2.9.10
+
+# Geração de Relatórios
+reportlab==4.4.10
+
+# Frontend
+streamlit==1.54.0
+
+# Cliente HTTP
+httpx==0.28.1
+
+# Upload de Arquivos (multipart/form-data para FastAPI)
+python-multipart==0.0.20
+
+# Rate Limiting
+slowapi==0.1.9
+
+# Autenticação (JWT) e passwords
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Criptografia em repouso (campos opcionais)
+cryptography>=45.0.7,<47
+

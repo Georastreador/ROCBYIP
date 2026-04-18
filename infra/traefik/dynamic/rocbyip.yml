@@ -1,0 +1,43 @@
+# Encaminhamento para ROCBYIP no host (uvicorn :8000, streamlit :8501).
+# Ajuste Host(`...`) e o e-mail no traefik.yml (Let's Encrypt).
+#
+# Linux: extra_hosts com host-gateway no docker-compose já define host.docker.internal.
+
+http:
+  middlewares:
+    rocbyip-upload-limit:
+      buffering:
+        maxRequestBodyBytes: 52428800
+        memRequestBodyBytes: 2097152
+
+  routers:
+    rocbyip-api:
+      rule: Host(`api.example.com`)
+      entryPoints:
+        - websecure
+      middlewares:
+        - rocbyip-upload-limit
+      service: svc-rocbyip-api
+      tls:
+        certResolver: letsencrypt
+
+    rocbyip-ui:
+      rule: Host(`app.example.com`)
+      entryPoints:
+        - websecure
+      service: svc-rocbyip-ui
+      tls:
+        certResolver: letsencrypt
+
+  services:
+    svc-rocbyip-api:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: http://host.docker.internal:8000
+
+    svc-rocbyip-ui:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: http://host.docker.internal:8501
