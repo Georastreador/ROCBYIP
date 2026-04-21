@@ -156,7 +156,7 @@ with st.sidebar:
 
     @st.dialog(t("manual_title"), width="large")
     def show_manual():
-        manual_path = SCRIPT_DIR.parent / "docs" / "MANUAL_DE_OPERACAO.md"
+        manual_path = SCRIPT_DIR.parent / "docs" / "Manual de Operacao BYIP.md"
         if manual_path.exists():
             with open(manual_path, encoding="utf-8") as f:
                 st.markdown(f.read())
