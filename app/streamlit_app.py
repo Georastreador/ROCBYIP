@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 
 from i18n import t
+from kinde_streamlit import check_auth
 
 # Constantes de validação
 MAX_TITLE_LENGTH = 200
@@ -72,6 +73,10 @@ except:
         page_icon="👑",  # Emoji como fallback - favicon.ico será detectado automaticamente
         layout="wide"
     )
+
+# ── Autenticação Kinde (deve vir antes de qualquer conteúdo da app) ───────────
+if not check_auth():
+    st.stop()
 
 if "lang" not in st.session_state:
     st.session_state.lang = "pt"
