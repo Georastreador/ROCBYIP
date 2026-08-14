@@ -25,8 +25,10 @@ from .services.auth_jwt import (
     JWT_SECRET,
 )
 from .auth_policy import auth_required_mode
-import json, os, hashlib, base64, datetime, sys, re, secrets
+import json, os, hashlib, base64, datetime, sys, re, secrets, logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Adicionar diretório raiz ao path para importar security_utils
 current_dir = Path(__file__).parent
@@ -35,13 +37,24 @@ sys.path.insert(0, str(root_dir))
 
 from security.security_utils import (
     sanitize_html_text, sanitize_filename, safe_path_join,
-    sanitize_log_detail, validate_api_key
+    sanitize_log_detail, validate_api_key, api_keys_match,
+    content_matches_extension,
 )
 
 Base.metadata.create_all(bind=engine)
 run_schema_migrations(engine)
 
-app = FastAPI(title="OSINT Planning API v3")
+# Documentação (Swagger/ReDoc) expõe o schema completo da API — mantê-la fora
+# do ar por padrão em produção. DEBUG=true (dev/staging) reativa /docs, /redoc
+# e /openapi.json.
+DEBUG_MODE = os.environ.get("DEBUG", "false").lower() == "true"
+
+app = FastAPI(
+    title="OSINT Planning API v3",
+    docs_url="/docs" if DEBUG_MODE else None,
+    redoc_url="/redoc" if DEBUG_MODE else None,
+    openapi_url="/openapi.json" if DEBUG_MODE else None,
+)
 
 # Configurar exception handlers globais
 setup_exception_handlers(app)
@@ -103,16 +116,12 @@ ALLOWED_MIME_TYPES = {
 # Permite desabilitar via variável de ambiente RATE_LIMIT_ENABLED=false
 RATE_LIMIT_ENABLED = os.environ.get("RATE_LIMIT_ENABLED", "true").lower() == "true"
 
-# Sempre criar o limiter, mas com limites muito altos se desabilitado
-limiter = Limiter(key_func=get_remote_address)
+# enabled=RATE_LIMIT_ENABLED é o que de fato liga/desliga o limiter (slowapi
+# checa self.enabled em _check_request_limit); antes disso era um no-op — os
+# limites de @limiter.limit(...) continuavam valendo mesmo com a env var false.
+limiter = Limiter(key_func=get_remote_address, enabled=RATE_LIMIT_ENABLED)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
-# Se desabilitado, definir limites muito altos (efetivamente sem limite)
-if not RATE_LIMIT_ENABLED:
-    # Override dos limites para valores muito altos quando desabilitado
-    # Isso permite que o código funcione sem mudanças, mas sem limitar
-    pass  # Os decoradores @limiter.limit() ainda funcionam, mas podem ser ignorados em dev
 
 # Configuração CORS
 # Permite configuração via variável de ambiente CORS_ORIGINS
@@ -144,7 +153,9 @@ app.add_middleware(
 
 
 def _public_paths() -> set[str]:
-    p = {"/health", "/auth/token", "/openapi.json"}
+    p = {"/health", "/auth/token"}
+    if DEBUG_MODE:
+        p.add("/openapi.json")
     if os.environ.get("ALLOW_REGISTRATION", "").lower() == "true":
         p.add("/auth/register")
     return p
@@ -153,7 +164,10 @@ def _public_paths() -> set[str]:
 def _is_public_request(path: str) -> bool:
     if path in _public_paths():
         return True
-    if path.startswith("/docs") or path.startswith("/redoc"):
+    # /docs e /redoc só existem quando DEBUG_MODE=true (docs_url/redoc_url do
+    # FastAPI ficam None caso contrário, então a rota nem é registrada) — mas
+    # mantemos a checagem explícita aqui como defesa em profundidade.
+    if DEBUG_MODE and (path.startswith("/docs") or path.startswith("/redoc")):
         return True
     if path.startswith("/public/plans/by-token/") and os.environ.get("ENABLE_PUBLIC_SHARE", "").lower() == "true":
         return True
@@ -221,13 +235,13 @@ async def unified_auth_middleware(request: Request, call_next):
         if not needs_backup_credential:
             return await call_next(request)
         admin_jwt = getattr(request.state, "jwt_role", None) == "admin"
-        key_ok = bool(API_KEY) and request.headers.get("X-API-Key") == API_KEY
+        key_ok = api_keys_match(request.headers.get("X-API-Key"), API_KEY)
         if admin_jwt or key_ok:
             return await call_next(request)
         return JSONResponse({"detail": "Unauthorized"}, status_code=401)
 
     mode = auth_required_mode()
-    api_ok = bool(API_KEY) and request.headers.get("X-API-Key") == API_KEY
+    api_ok = api_keys_match(request.headers.get("X-API-Key"), API_KEY)
     jwt_ok = bool(payload)
 
     if mode == "none":
@@ -756,7 +770,13 @@ async def upload_evidence(request: Request, plan_id: int = Form(...), file: Uplo
         # Verificar tamanho final
         if len(content) == 0:
             raise HTTPException(status_code=400, detail="File is empty")
-        
+
+        # Magic bytes: extensão e Content-Type são controlados pelo cliente e
+        # podem ser forjados; os bytes iniciais do arquivo são o único sinal
+        # que exige alterar o próprio conteúdo para burlar.
+        if not content_matches_extension(file.filename, content):
+            raise HTTPException(status_code=400, detail="File content does not match its extension")
+
         if len(content) > MAX_FILE_SIZE:
             raise HTTPException(
                 status_code=413,
@@ -854,20 +874,24 @@ def create_backup_endpoint(request: Request, db: Session = Depends(get_db)):
     """Cria um backup do banco de dados"""
     try:
         backup_path = create_backup()
-        audit_log(db, action="backup_create", detail=f"Backup created: {backup_path}")
-        
+        backup_file = os.path.basename(backup_path)
+        audit_log(db, action="backup_create", detail=sanitize_log_detail(f"Backup created: {backup_file}"))
+
         # Limpar backups antigos após criar novo
         cleanup_old_backups()
-        
+
         return {
             "status": "success",
             "message": "Backup created successfully",
-            "backup_path": backup_path,
+            "backup_file": backup_file,
             "created_at": datetime.datetime.now().isoformat()
         }
     except Exception as e:
-        audit_log(db, action="backup_error", detail=f"Error creating backup: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error creating backup: {str(e)}")
+        # Não expor detalhes internos (paths, driver de DB) na resposta HTTP —
+        # o detalhe completo já vai para o audit log / logger do servidor.
+        logger.error(f"Error creating backup: {e}")
+        audit_log(db, action="backup_error", detail=sanitize_log_detail(f"Error creating backup: {str(e)}"))
+        raise HTTPException(status_code=500, detail="Error creating backup")
 
 
 @app.get("/backup/list")
@@ -878,13 +902,17 @@ def list_backups_endpoint(request: Request, db: Session = Depends(get_db)):
         backups = list_backups()
         stats = get_backup_stats()
         audit_log(db, action="backup_list", detail=f"Listed {len(backups)} backups")
-        
+
         return {
-            "backups": backups,
+            # "path" nunca deveria sair da API — remove o path absoluto do
+            # servidor antes de responder (defesa em profundidade; ver fix
+            # em list_backups()).
+            "backups": [{k: v for k, v in b.items() if k != "path"} for b in backups],
             "stats": stats
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error listing backups: {str(e)}")
+        logger.error(f"Error listing backups: {e}")
+        raise HTTPException(status_code=500, detail="Error listing backups")
 
 
 @app.post("/backup/restore/{backup_filename}")
@@ -921,8 +949,9 @@ def restore_backup_endpoint(request: Request, backup_filename: str, db: Session 
     except HTTPException:
         raise
     except Exception as e:
-        audit_log(db, action="backup_restore_error", detail=f"Error restoring backup: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error restoring backup: {str(e)}")
+        logger.error(f"Error restoring backup {backup_filename}: {e}")
+        audit_log(db, action="backup_restore_error", detail=sanitize_log_detail(f"Error restoring backup: {str(e)}"))
+        raise HTTPException(status_code=500, detail="Error restoring backup")
 
 
 @app.get("/backup/stats")
@@ -933,4 +962,5 @@ def backup_stats_endpoint(request: Request, db: Session = Depends(get_db)):
         stats = get_backup_stats()
         return stats
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error getting backup stats: {str(e)}")
+        logger.error(f"Error getting backup stats: {e}")
+        raise HTTPException(status_code=500, detail="Error getting backup stats")
