@@ -23,7 +23,9 @@ streamlit==1.54.0
 httpx==0.28.1
 
 # Upload de Arquivos (multipart/form-data para FastAPI)
-python-multipart==0.0.20
+# 0.0.20 tinha DoS via preamble/epilogue grande em multipart (CVE-2026-40347,
+# corrigido na 0.0.26); atualizado para a última estável.
+python-multipart==0.0.32
 
 # Rate Limiting
 slowapi==0.1.9
@@ -34,4 +36,3 @@ passlib[bcrypt]==1.7.4
 
 # Criptografia em repouso (campos opcionais)
 cryptography>=45.0.7,<47
-
