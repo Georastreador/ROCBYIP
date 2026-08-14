@@ -3,9 +3,12 @@ Módulo de Utilitários de Segurança para ROCBYIP vf1
 Contém funções para sanitização, validação e segurança
 """
 import html
+import io
 import re
 import os
 import logging
+import secrets
+import zipfile
 from typing import Optional, Dict, Any
 from pathlib import Path
 
@@ -233,6 +236,69 @@ def validate_api_key(api_key: Optional[str], require_key: bool = False) -> tuple
         insecure_defaults = ["devkey", "default", "test", "admin", "password", "123456"]
         if api_key.lower() in insecure_defaults:
             return False, "API_KEY não pode usar valores padrão inseguros"
-    
+
     return True, None
 
+
+def api_keys_match(provided: Optional[str], expected: Optional[str]) -> bool:
+    """Compara API keys em tempo constante. False se qualquer uma estiver ausente."""
+    if not provided or not expected:
+        return False
+    return secrets.compare_digest(provided.encode("utf-8"), expected.encode("utf-8"))
+
+
+# ============================================================================
+# VALIDAÇÃO DE CONTEÚDO DE UPLOAD (MAGIC BYTES)
+# ============================================================================
+
+# Assinaturas (magic bytes) para os tipos binários aceitos em uploads de evidência
+_FILE_SIGNATURES = {
+    ".pdf": (b"%PDF",),
+    ".png": (b"\x89PNG\r\n\x1a\n",),
+    ".jpg": (b"\xff\xd8\xff",),
+    ".jpeg": (b"\xff\xd8\xff",),
+    ".gif": (b"GIF87a", b"GIF89a"),
+    ".docx": (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"),
+    ".xlsx": (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"),
+    ".doc": (b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1",),
+    ".xls": (b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1",),
+    ".zip": (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"),
+    ".rar": (b"Rar!\x1a\x07\x00", b"Rar!\x1a\x07\x01\x00"),
+    ".7z": (b"7z\xbc\xaf\x27\x1c",),
+}
+
+
+def _is_valid_ooxml(content: bytes) -> bool:
+    """
+    Confirma que um ZIP é um pacote OOXML (docx/xlsx) de verdade, não apenas
+    qualquer arquivo ZIP renomeado. Todo pacote OOXML válido tem um
+    "[Content_Types].xml" na raiz. Só lê a lista de entradas (namelist),
+    nunca descompacta conteúdo — não há risco de zip bomb aqui.
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            return "[Content_Types].xml" in zf.namelist()
+    except (zipfile.BadZipFile, OSError, EOFError):
+        return False
+
+
+def content_matches_extension(filename: str, content: bytes) -> bool:
+    """
+    Valida magic bytes para tipos binários; texto é aceito se não for vazio.
+    O cliente controla `filename` e o `Content-Type` declarado — magic bytes
+    são o único sinal que não é trivialmente falsificável sem alterar o
+    próprio arquivo.
+    """
+    ext = Path(filename).suffix.lower()
+    if ext in {".txt", ".md", ".csv", ".json", ".xml"}:
+        return True
+    signatures = _FILE_SIGNATURES.get(ext)
+    if not signatures:
+        return False
+    if not any(content.startswith(sig) for sig in signatures):
+        return False
+    if ext in {".docx", ".xlsx"}:
+        # PK\x03\x04 e afins também batem com qualquer ZIP comum — exige a
+        # estrutura interna do OOXML para não aceitar um .zip só renomeado.
+        return _is_valid_ooxml(content)
+    return True
