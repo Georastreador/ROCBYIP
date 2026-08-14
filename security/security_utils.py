@@ -302,3 +302,4 @@ def content_matches_extension(filename: str, content: bytes) -> bool:
         # estrutura interna do OOXML para não aceitar um .zip só renomeado.
         return _is_valid_ooxml(content)
     return True
+
