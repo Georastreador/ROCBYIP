@@ -34,8 +34,13 @@ KINDE_DOMAIN        = os.getenv("KINDE_DOMAIN", "").rstrip("/")
 KINDE_CLIENT_ID     = os.getenv("KINDE_CLIENT_ID", "")
 KINDE_CLIENT_SECRET = os.getenv("KINDE_CLIENT_SECRET", "")
 KINDE_REDIRECT_URI  = os.getenv("KINDE_REDIRECT_URI", "https://byip.rocintelligence.com")
-# Segredo para assinar o state (previne adulteração)
-_STATE_SECRET = os.getenv("SESSION_SECRET", "roc-byip-state-secret-change-in-prod")
+# Segredo para assinar o state (previne adulteração/injeção no fluxo PKCE).
+# Sem valor padrão: o antigo fallback ("roc-byip-state-secret-change-in-prod")
+# ficou publicado neste repositório público, então qualquer implantação que
+# não tivesse SESSION_SECRET configurado estava assinando o `state` — que
+# carrega o code_verifier do PKCE — com um segredo conhecido publicamente,
+# permitindo forjar/adulterar o `state` de outro utilizador.
+_STATE_SECRET = os.getenv("SESSION_SECRET", "").strip()
 
 SESSION_KEY = "kinde_access_token"
 
@@ -143,6 +148,11 @@ def is_configured() -> bool:
     return bool(KINDE_DOMAIN and KINDE_CLIENT_ID)
 
 
+def _state_secret_ok() -> bool:
+    """SESSION_SECRET precisa estar definido (>=16 chars) para assinar o state do PKCE."""
+    return len(_STATE_SECRET) >= 16
+
+
 def check_auth() -> bool:
     """
     Verifica autenticação. Deve ser chamada logo após st.set_page_config.
@@ -150,6 +160,13 @@ def check_auth() -> bool:
     """
     if not is_configured():
         return True  # Dev: sem Kinde configurado, deixa passar
+
+    if not _state_secret_ok():
+        # Falha fechada: sem SESSION_SECRET não há como assinar o `state` do
+        # PKCE com segurança. Bloqueia o login em vez de usar um segredo
+        # adivinhável — nunca reintroduzir aqui um valor padrão fixo.
+        _show_config_error()
+        return False
 
     # ── Processar callback OAuth ──────────────────────────────────────────
     params = st.query_params
@@ -197,6 +214,23 @@ def logout():
         if is_configured() else KINDE_REDIRECT_URI
     )
     st.markdown(f'<meta http-equiv="refresh" content="0; url={logout_url}">', unsafe_allow_html=True)
+    st.stop()
+
+
+def _show_config_error():
+    """Tela de erro quando o Kinde está configurado mas SESSION_SECRET não está — nunca deixa logar sem ele."""
+    st.markdown("""
+    <style>
+    #MainMenu, header, footer { visibility: hidden; }
+    .block-container { max-width: 560px; margin: 10vh auto; padding: 2rem; }
+    </style>
+    """, unsafe_allow_html=True)
+    st.error(
+        "⚠️ Configuração de autenticação incompleta: a variável de ambiente "
+        "**SESSION_SECRET** não está definida (mín. 16 caracteres).\n\n"
+        "O login fica bloqueado até isso ser corrigido — sem ela não é possível "
+        "assinar o `state` do fluxo OAuth2/PKCE com segurança."
+    )
     st.stop()
 
 
